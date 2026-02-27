@@ -1,136 +1,147 @@
-import streamlit as st
+import numpy as np
 import pandas as pd
+import streamlit as st
 
 from utils.io import load_data
-from utils.style import inject_css
+from utils.scoring import normalize_price_gap, RiskConfig
 
-st.set_page_config(page_title="Price Lookup | RegTech BĐS", page_icon="🔎", layout="wide")
-inject_css()
+st.set_page_config(page_title="Price Lookup", layout="wide")
 
-st.title("🔎 Tra cứu giá đất Nhà nước & tham chiếu thị trường")
-st.markdown(
-    """
-<div class="small-note">
-Trang này giúp tra cứu nhanh theo <b>Quận → Phường → Đường</b>.
-Kết quả hiển thị gồm: <b>GovPrice 2026</b> (giá Nhà nước), <b>MarketRef</b> (trung vị tham chiếu từ tin đăng đã làm sạch),
-<b>Price Gap</b> và <b>Risk Score</b>.
-</div>
-""",
-    unsafe_allow_html=True,
+st.title("Tra cứu GovPrice & MarketRef theo tuyến đường")
+st.caption("Dữ liệu: tin đăng nhà ở mặt tiền (Q1, Q5) đã làm sạch; GovPrice theo Bảng giá đất TP.HCM 2026; MarketRef theo thống kê robust.")
+
+listings_df, summary_by_district, top_streets = load_data()
+
+cfg = RiskConfig()
+GOV = cfg.gov_price_col
+UNIT = cfg.unit_price_col
+FAKE = cfg.fake_prob_col
+MARKET = "Market Reference Unit Price (median, million VND/m²)"
+GAP = "Price Gap Corrected (MarketRef / GovPrice)"
+RISK = "Risk Score"
+RISK_LEVEL = "Risk Level"
+
+# Components (added by utils.scoring.compute_risk_score)
+S_LEGAL = "S_legal"
+S_PLAN = "S_plan"
+S_PRICE = "S_price"
+S_FAKE = "S_fake"
+LISTING_GAP = "ListingGap"
+
+MATCH = "Match Type"
+
+# --- Sidebar filters ---
+st.sidebar.header("Bộ lọc")
+districts = sorted([d for d in top_streets["District"].dropna().unique()])
+district = st.sidebar.selectbox("Quận", districts, index=0)
+
+wards = sorted(top_streets.loc[top_streets["District"] == district, "Ward"].dropna().unique())
+ward = st.sidebar.selectbox("Phường", wards, index=0 if wards else None)
+
+streets = sorted(
+    top_streets.loc[(top_streets["District"] == district) & (top_streets["Ward"] == ward), "Street"]
+    .dropna()
+    .unique()
+)
+street = st.sidebar.selectbox("Đường", streets, index=0 if streets else None)
+
+if ward is None or street is None:
+    st.info("Vui lòng chọn đủ Quận/Phường/Đường.")
+    st.stop()
+
+# Filter listing-level data
+dff = listings_df[(listings_df["District"] == district) & (listings_df["Ward"] == ward) & (listings_df["Street"] == street)].copy()
+if len(dff) == 0:
+    st.warning("Không có dữ liệu cho lựa chọn này.")
+    st.stop()
+
+# --- Aggregated metrics (street-level) ---
+m_gov = float(np.nanmedian(dff[GOV])) if GOV in dff else float("nan")
+m_market = float(np.nanmedian(dff[MARKET])) if MARKET in dff else float("nan")
+m_gap = float(np.nanmedian(dff[GAP])) if GAP in dff else (
+    m_market / m_gov if (pd.notna(m_market) and pd.notna(m_gov) and m_gov > 0) else float("nan")
 )
 
-df, df_gov, _, _ = load_data()
+m_risk = float(np.nanmean(dff[RISK])) if RISK in dff else float("nan")
+m_fake = float(np.nanmean(dff[S_FAKE])) if S_FAKE in dff else float("nan")
+m_legal = float(np.nanmean(dff[S_LEGAL])) if S_LEGAL in dff else float("nan")
+m_plan = float(np.nanmean(dff[S_PLAN])) if S_PLAN in dff else float("nan")
+m_price = float(np.nanmean(dff[S_PRICE])) if S_PRICE in dff else float("nan")
 
-# Sidebar filters
-st.sidebar.header("Bộ lọc tra cứu")
+s_gap = normalize_price_gap(m_gap) if pd.notna(m_gap) else float("nan")
 
-district = st.sidebar.selectbox("Quận", options=[1, 5], index=0)
+# Match type (mode)
+match_type = None
+if MATCH in dff.columns:
+    mm = dff[MATCH].dropna()
+    if len(mm) > 0:
+        match_type = mm.mode().iloc[0]
 
-gov_d = df_gov[df_gov["District"] == district].copy()
+# Weights (from load_data)
+weights = st.session_state.get("risk_weights", {})
 
-ward_options = sorted(gov_d["Ward"].dropna().unique().tolist())
-ward = st.sidebar.selectbox("Phường", options=ward_options)
-
-gov_dw = gov_d[gov_d["Ward"] == ward].copy()
-
-# Street search
-street_search = st.sidebar.text_input("Tìm đường (gõ vài ký tự)", value="")
-street_options = sorted(gov_dw["Street"].dropna().unique().tolist())
-if street_search.strip():
-    ss = street_search.strip().lower()
-    street_options = [s for s in street_options if ss in str(s).lower()]
-
-street = st.sidebar.selectbox("Đường", options=street_options)
-
-# Filter listing-level table for the selected location
-dff = df[(df["District"] == district) & (df["Ward"] == ward) & (df["Street"] == street)].copy()
-
-# Pull a single gov row
-gov_row = gov_dw[gov_dw["Street"] == street].head(1)
-
-# Layout: summary metrics
-left, right = st.columns([1, 1])
-
+# --- Display ---
+left, mid, right = st.columns([1.15, 1.15, 1.2])
 with left:
     st.subheader("Kết quả tra cứu")
-    if gov_row.empty:
-        st.error("Không tìm thấy GovPrice cho tuyến đường này trong dữ liệu hiện có.")
-        gov_price = None
-        match_type = None
-    else:
-        gov_price = float(gov_row.iloc[0]["gov_price_mil_m2"])
-        match_col = "Gov Price Match Type" if "Gov Price Match Type" in gov_row.columns else None
-        match_type = str(gov_row.iloc[0][match_col]) if match_col else "N/A"
+    st.write(f"**Khu vực:** Quận {district} • {ward} • {street}")
+    st.write(f"**Số tin trong nhóm:** {len(dff):,}")
+    if match_type:
+        st.caption(f"GovPrice match type (tham khảo): {match_type}")
 
-        st.markdown(
-            f"""
-<span class="badge">GovPrice 2026</span> <b>{gov_price:,.1f}</b> triệu đồng/m²
-<br>
-<span class="small-note">Match type: <b>{match_type}</b></span>
-""",
-            unsafe_allow_html=True,
-        )
-
-    # Market reference & risk
-    if not dff.empty:
-        market_ref = float(dff["market_ref_mil_m2"].dropna().iloc[0]) if dff["market_ref_mil_m2"].notna().any() else None
-        price_gap = float(dff["price_gap"].dropna().iloc[0]) if dff["price_gap"].notna().any() else None
-        risk_score = float(dff["risk_score"].dropna().iloc[0]) if dff["risk_score"].notna().any() else None
-        risk_level = str(dff["risk_level"].dropna().iloc[0]) if dff["risk_level"].notna().any() else "N/A"
-
-        c1, c2, c3 = st.columns(3)
-        if market_ref is not None:
-            c1.metric("MarketRef (median)", f"{market_ref:,.1f} tr/m²")
-        if price_gap is not None:
-            c2.metric("Price Gap", f"{price_gap:,.2f}×")
-        if risk_score is not None:
-            c3.metric("Risk Score", f"{risk_score:,.3f}")
-
-        st.markdown(f"<div class='small-note'>Phân loại rủi ro: <b>{risk_level}</b></div>", unsafe_allow_html=True)
-    else:
-        st.info("Chưa có tin đăng trong dữ liệu cho đúng (Quận, Phường, Đường) này.")
+with mid:
+    st.metric("GovPrice 2026 (median)", f"{m_gov:,.1f} tr/m²" if pd.notna(m_gov) else "—")
+    st.metric("MarketRef (median)", f"{m_market:,.1f} tr/m²" if pd.notna(m_market) else "—")
 
 with right:
-    st.subheader("Danh sách tin đăng (mẫu)")
-    if dff.empty:
-        st.write("—")
-    else:
-        show_cols = [
-            "Price (million VND)",
-            "Area (m²)",
-            "unit_price_mil_m2",
-            "fake_prob",
-            "price_gap",
-            "risk_score",
-            "Listing Text",
-        ]
-        show_cols = [c for c in show_cols if c in dff.columns]
-        preview = dff[show_cols].copy()
+    st.metric("Price Gap (median)", f"{m_gap:,.3f}×" if pd.notna(m_gap) else "—")
+    st.metric("Risk Score (mean)", f"{m_risk:,.3f}" if pd.notna(m_risk) else "—")
+    st.caption(
+        f"S_fake={m_fake:,.3f} • S_price={m_price:,.3f} • S_legal={m_legal:,.3f} • S_plan={m_plan:,.3f} • "
+        f"S_gap (chuẩn hoá)={s_gap:,.3f}"
+    )
 
-        # prettier formats
-        if "fake_prob" in preview.columns:
-            preview["fake_prob"] = (preview["fake_prob"] * 100).round(2)
-            preview = preview.rename(columns={"fake_prob": "P(fake) (%)"})
-        if "unit_price_mil_m2" in preview.columns:
-            preview = preview.rename(columns={"unit_price_mil_m2": "Unit Price (tr/m²)"})
-        if "price_gap" in preview.columns:
-            preview = preview.rename(columns={"price_gap": "Price Gap"})
-        if "risk_score" in preview.columns:
-            preview = preview.rename(columns={"risk_score": "Risk Score"})
-
-        st.dataframe(preview.head(30), use_container_width=True, height=420)
-
-        # Download
-        csv = preview.to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            "⬇️ Tải CSV (30 dòng đầu)",
-            data=csv,
-            file_name=f"price_lookup_Q{district}_{ward}_{street}.csv",
-            mime="text/csv",
-        )
+if weights:
+    st.caption(
+        "Trọng số (CRITIC): "
+        + ", ".join([f"{k}={v:.2f}" for k, v in weights.items()])
+    )
 
 st.divider()
-st.warning(
-    """Lưu ý: Dữ liệu thị trường là giá chào bán (asking price) từ tin đăng online; vị trí (lat/lon) được geocode theo đường/phường/quận nên chỉ mang tính xấp xỉ.
-GovPrice/thuế/phí chỉ mang tính tham khảo học thuật."""
+
+with st.expander("Cách tính Risk Score (4 thành phần)", expanded=False):
+    st.markdown(
+        """- **S_legal (pháp lý)**: trích xuất tín hiệu từ mô tả tin đăng (ví dụ “sổ hồng/sổ đỏ” → 0; “vi bằng/giấy tay/sổ chung…” → 1; thiếu thông tin → 0.5).  
+- **S_fake (tin ảo)**: xác suất P(fake) từ mô hình tham khảo (dạng % → quy đổi về 0..1).  
+- **S_price (chênh lệch giá)**: chuẩn hóa log theo *ListingGap = unit_price / GovPrice*, với cap=10.  
+- **S_plan (quy hoạch–tranh chấp)**: trích xuất tín hiệu “quy hoạch/lộ giới/tranh chấp…”, phân biệt câu khẳng định an toàn (“không quy hoạch…”) và câu cảnh báo (“dính quy hoạch…”).  
+
+RiskScore = Σ w·S (trọng số w theo CRITIC). Mức rủi ro Low/Medium/High được phân theo phân vị (Q33/Q67) trên toàn bộ dữ liệu.
+"""
+    )
+
+st.subheader("Chi tiết tin trong nhóm")
+
+show_cols = [
+    "Area (m²)",
+    "Price (million VND)",
+    UNIT,
+    GOV,
+    MARKET,
+    GAP,
+    LISTING_GAP,
+    S_FAKE,
+    S_PRICE,
+    S_LEGAL,
+    S_PLAN,
+    RISK,
+    RISK_LEVEL,
+]
+show_cols = [c for c in show_cols if c in dff.columns]
+
+sort_col = GAP if GAP in dff.columns else (RISK if RISK in dff.columns else show_cols[0])
+
+st.dataframe(
+    dff[show_cols].sort_values(sort_col, ascending=False).head(80),
+    use_container_width=True,
 )
