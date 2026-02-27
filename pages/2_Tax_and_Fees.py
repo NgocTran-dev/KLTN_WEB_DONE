@@ -1,153 +1,169 @@
+import pandas as pd
 import streamlit as st
 
+from utils.io import load_data
 from utils.tax import (
-    registration_fee_land_vnd,
-    non_agri_land_tax_vnd,
-    pit_transfer_tax_vnd,
-)
-from utils.style import inject_css
-
-st.set_page_config(page_title="Tax & Fees | RegTech BĐS", page_icon="🧾", layout="wide")
-inject_css()
-
-st.title("🧾 Ước tính thuế & phí (tham khảo)")
-st.markdown(
-    """
-<div class="small-note">
-Trang này minh họa cách ước tính một số khoản phổ biến liên quan đến nhà/đất:
-<b>lệ phí trước bạ</b>, <b>thuế sử dụng đất phi nông nghiệp</b> và <b>thuế TNCN khi chuyển nhượng</b>.
-Các tùy chọn miễn/giảm dựa trên <b>tự khai</b> của người dùng và chỉ mang tính tham khảo.
-</div>
-""",
-    unsafe_allow_html=True,
+    calc_non_agri_land_use_tax,
+    calc_pit_real_estate_transfer,
+    calc_registration_fee_land,
 )
 
-# ------------------------
-# Inputs
-# ------------------------
-c1, c2, c3 = st.columns(3)
+st.set_page_config(page_title="Tax & Fees (Tham khảo)", page_icon="🧾", layout="wide")
 
-with c1:
-    district = st.selectbox("Quận (để gợi ý hạn mức)", options=[1, 5], index=0)
-    area_m2 = st.number_input("Diện tích đất (m²)", min_value=0.0, value=80.0, step=1.0)
+GOV = "Gov Price 2026 Corrected (million VND/m²)"
+AREA = "Area (m²)"
+TOTAL_PRICE = "Price (million VND)"
 
-with c2:
-    gov_price_mil_m2 = st.number_input(
-        "Đơn giá Nhà nước (GovPrice) (triệu đồng/m²)",
-        min_value=0.0,
-        value=190.0 if district == 1 else 149.2,
-        step=0.1,
-        help="Bạn có thể copy từ trang Price Lookup.",
-    )
-
-with c3:
-    transfer_price_bil = st.number_input(
-        "Giá trị chuyển nhượng (tỷ đồng) (nếu có)",
-        min_value=0.0,
-        value=25.0,
-        step=0.5,
-        help="Dùng để tính thuế TNCN khi chuyển nhượng (2% x giá chuyển nhượng, trừ trường hợp được miễn).",
-    )
-
-st.divider()
-
-# ------------------------
-# Relief / exemption options (simplified)
-# ------------------------
-with st.expander("🎯 Tùy chọn miễn/giảm (tham khảo)", expanded=True):
-    colA, colB, colC = st.columns(3)
-
-    with colA:
-        land_tax_relief = st.selectbox(
-            "Ưu đãi thuế SDĐ phi nông nghiệp (đất ở)",
-            options=[
-                "Không áp dụng",
-                "Miễn thuế (phần diện tích trong hạn mức)",
-                "Giảm 50% (phần diện tích trong hạn mức)",
-            ],
-            index=0,
-        )
-
-    with colB:
-        pit_exempt = st.checkbox(
-            "Miễn thuế TNCN chuyển nhượng (ví dụ: giữa thân nhân, hoặc nhà/đất duy nhất...)",
-            value=False,
-        )
-
-    with colC:
-        regfee_exempt = st.checkbox(
-            "Miễn lệ phí trước bạ (một số trường hợp tặng cho/thừa kế...)",
-            value=False,
-        )
-
-    st.markdown(
-        """
-**Ghi chú nhanh (tóm tắt theo luật, không phải tư vấn pháp lý):**
-- Thuế SDĐPNN (đất ở) là thuế **hàng năm**, có thuế suất **lũy tiến theo phần diện tích**.
-- “Miễn/giảm” trong luật có điều kiện cụ thể (hộ nghèo, người có công, địa bàn khó khăn, bất khả kháng, ...).
-- Thuế TNCN chuyển nhượng và lệ phí trước bạ cũng có các trường hợp miễn theo hồ sơ thực tế.
-"""
-    )
-
-# quota suggestion (Q1 & Q5 share the same 160 m² in QĐ 69/2024/QĐ-UBND)
-default_quota = 160.0
-quota_m2 = st.number_input(
-    "Hạn mức đất ở dùng để tính thuế SDĐPNN (m²)",
-    min_value=0.0,
-    value=default_quota,
-    step=10.0,
-    help="Mặc định 160 m² (áp dụng cho Quận 1 và Quận 5 theo QĐ 69/2024/QĐ-UBND). Bạn có thể chỉnh nếu trường hợp của bạn khác.",
+st.title("🧾 Tax & Fees (tham khảo)")
+st.caption(
+    "Ước tính nhanh 3 khoản phổ biến khi giao dịch BĐS: lệ phí trước bạ, thuế SDĐ phi nông nghiệp và thuế TNCN."
 )
-
-relief_map = {
-    "Không áp dụng": "none",
-    "Miễn thuế (phần diện tích trong hạn mức)": "exempt_within_quota",
-    "Giảm 50% (phần diện tích trong hạn mức)": "reduce50_within_quota",
-}
-relief_code = relief_map.get(land_tax_relief, "none")
-
-# ------------------------
-# Compute
-# ------------------------
-reg = registration_fee_land_vnd(area_m2=area_m2, gov_price_mil_m2=gov_price_mil_m2, exempt=regfee_exempt)
-land_tax = non_agri_land_tax_vnd(area_m2=area_m2, gov_price_mil_m2=gov_price_mil_m2, quota_m2=quota_m2, relief=relief_code)
-pit = pit_transfer_tax_vnd(transfer_price_billion_vnd=transfer_price_bil, exempt=pit_exempt)
-
-# ------------------------
-# Results
-# ------------------------
-st.subheader("Kết quả ước tính (VND)")
-
-r1, r2, r3, r4 = st.columns(4)
-r1.metric("Lệ phí trước bạ (đất)", f"{reg['fee_vnd']:,.0f}")
-r2.metric("Thuế SDĐPNN (năm)", f"{land_tax['tax_vnd']['total']:,.0f}")
-r3.metric("Thuế TNCN chuyển nhượng", f"{pit['pit_vnd']:,.0f}")
-r4.metric("Tổng (3 khoản)", f"{(reg['fee_vnd'] + land_tax['tax_vnd']['total'] + pit['pit_vnd']):,.0f}")
-
-with st.expander("📌 Diễn giải chi tiết cách tính thuế SDĐPNN (đất ở)", expanded=False):
-    seg = land_tax["segments"]
-    tb = land_tax["tax_vnd_before_relief"]
-    ta = land_tax["tax_vnd"]
-
-    st.markdown(
-        f"""
-**Phân tách diện tích theo hạn mức:**
-- Trong hạn mức: **{seg['within_quota_m2']:.1f} m²**
-- Vượt hạn mức đến 3× hạn mức: **{seg['over_quota_to_3x_m2']:.1f} m²**
-- Vượt trên 3× hạn mức: **{seg['over_3x_quota_m2']:.1f} m²**
-
-**Thuế trước ưu đãi (VND):**
-- Bậc 1 (0.03%): {tb['within_quota']:,.0f}
-- Bậc 2 (0.07%): {tb['over_quota_to_3x']:,.0f}
-- Bậc 3 (0.15%): {tb['over_3x_quota']:,.0f}
-- **Tổng trước ưu đãi:** {tb['total']:,.0f}
-
-**Sau ưu đãi đang chọn:** {land_tax['relief']}
-- **Tổng sau ưu đãi:** {ta['total']:,.0f}
-"""
-    )
 
 st.warning(
-    """Lưu ý: Đây là công cụ ước tính học thuật. Thuế/phí thực tế phụ thuộc hồ sơ, thời điểm áp dụng văn bản, và kết luận của cơ quan thuế/cơ quan đăng ký. 
-Nếu cần số liệu chính thức, bạn nên tra theo văn bản hiện hành và/hoặc hỏi cơ quan có thẩm quyền."""
+    "Kết quả chỉ mang tính tham khảo/giáo dục. Miễn/giảm và căn cứ tính có thể phụ thuộc hồ sơ thực tế, hạn mức địa phương và văn bản hiện hành."
+)
+
+# --- Load data ---
+df, _, _ = load_data(frontage_only=True)
+
+# --- Quick pick from dataset ---
+st.subheader("1) Chọn nhanh một tin trong dữ liệu (tuỳ chọn)")
+
+colA, colB, colC = st.columns([1, 1, 2])
+with colA:
+    district = st.selectbox("Quận", sorted(df["District"].dropna().unique().tolist()), index=0)
+with colB:
+    ward_options = sorted(df[df["District"] == district]["Ward"].dropna().unique().tolist())
+    ward = st.selectbox("Phường", ward_options)
+with colC:
+    street_options = sorted(
+        df[(df["District"] == district) & (df["Ward"] == ward)]["Street"].dropna().unique().tolist()
+    )
+    street = st.selectbox("Đường", street_options)
+
+subset = df[(df["District"] == district) & (df["Ward"] == ward) & (df["Street"] == street)].copy()
+
+st.caption(f"Số tin trong nhóm đã chọn: {len(subset):,}")
+
+picked_row = None
+if len(subset) > 0:
+    # Create a lightweight selector label
+    subset = subset.reset_index(drop=True)
+    subset["__label__"] = (
+        "#" + subset.index.astype(str)
+        + " | " + subset[AREA].round(1).astype(str) + " m²"
+        + " | " + subset[TOTAL_PRICE].round(0).astype(int).astype(str) + " tr"
+    )
+    pick_label = st.selectbox("Chọn 1 tin để autofill", subset["__label__"].tolist())
+    picked_row = subset[subset["__label__"] == pick_label].iloc[0]
+
+with st.expander("Xem nhanh dữ liệu trong nhóm (5 dòng)"):
+    st.dataframe(
+        subset[[AREA, TOTAL_PRICE, GOV, "Độ tin cậy tin ảo (%)", "Risk Score"]].head(5),
+        use_container_width=True,
+    )
+
+# --- Inputs ---
+st.subheader("2) Nhập tham số để tính (có thể chỉnh lại)")
+
+# Default values from picked row
+area_default = float(picked_row[AREA]) if picked_row is not None and pd.notna(picked_row[AREA]) else 80.0
+price_default = (
+    float(picked_row[TOTAL_PRICE]) if picked_row is not None and pd.notna(picked_row[TOTAL_PRICE]) else 8000.0
+)
+gov_default = float(picked_row[GOV]) if picked_row is not None and pd.notna(picked_row[GOV]) else 190.0
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    area_m2 = st.number_input("Diện tích đất (m²)", min_value=0.0, value=area_default, step=1.0)
+with col2:
+    gov_price_mil_per_m2 = st.number_input(
+        "Giá đất tính theo bảng (triệu đồng/m²)", min_value=0.0, value=gov_default, step=1.0
+    )
+with col3:
+    transfer_price_mil = st.number_input(
+        "Giá chuyển nhượng (tổng, triệu đồng)", min_value=0.0, value=price_default, step=100.0
+    )
+
+st.markdown("---")
+
+st.subheader("3) Miễn/giảm (tuỳ chọn)")
+
+colx, coly, colz = st.columns(3)
+with colx:
+    pit_exempt = st.checkbox(
+        "Miễn thuế TNCN? (VD: chuyển nhượng giữa vợ chồng/cha mẹ-con/… hoặc duy nhất 1 nhà ở)",
+        value=False,
+    )
+with coly:
+    reg_fee_exempt = st.checkbox(
+        "Miễn lệ phí trước bạ? (VD: thừa kế/tặng cho giữa người thân theo quy định)",
+        value=False,
+    )
+with colz:
+    land_tax_exempt = st.checkbox(
+        "Miễn thuế SDĐ phi nông nghiệp? (Điều 9 Luật 48/2010/QH12)",
+        value=False,
+    )
+
+land_tax_reduce_50 = st.checkbox(
+    "Giảm 50% thuế SDĐ phi nông nghiệp? (Điều 10 Luật 48/2010/QH12)",
+    value=False,
+    disabled=land_tax_exempt,
+)
+
+quota_m2 = st.number_input(
+    "Hạn mức đất ở để tính thuế SDĐ PNN (m²) – tuỳ địa phương",
+    min_value=0.0,
+    value=120.0,
+    step=10.0,
+)
+
+st.markdown("---")
+
+st.subheader("4) Kết quả ước tính")
+
+# --- Compute ---
+reg_fee_mil = calc_registration_fee_land(
+    area_m2=area_m2,
+    gov_price_mil_per_m2=gov_price_mil_per_m2,
+    is_exempt=reg_fee_exempt,
+)
+
+pit_mil = calc_pit_real_estate_transfer(
+    transfer_price_mil=transfer_price_mil,
+    is_exempt=pit_exempt,
+)
+
+land_tax_breakdown = calc_non_agri_land_use_tax(
+    area_m2=area_m2,
+    gov_price_mil_per_m2=gov_price_mil_per_m2,
+    quota_m2=quota_m2,
+    is_exempt=land_tax_exempt,
+    is_reduce_50=land_tax_reduce_50,
+)
+
+colr1, colr2, colr3 = st.columns(3)
+with colr1:
+    st.metric("Lệ phí trước bạ (ước tính)", f"{reg_fee_mil:,.2f} triệu")
+with colr2:
+    st.metric("Thuế TNCN chuyển nhượng (ước tính)", f"{pit_mil:,.2f} triệu")
+with colr3:
+    st.metric("Thuế SDĐ PNN (ước tính / năm)", f"{land_tax_breakdown.total_mil:,.2f} triệu")
+
+with st.expander("Chi tiết thuế SDĐ phi nông nghiệp (lũy tiến)"):
+    st.write(
+        {
+            "Diện tích trong hạn mức (m²)": land_tax_breakdown.area_in_quota_m2,
+            "Diện tích vượt <= 3 lần hạn mức (m²)": land_tax_breakdown.area_over_quota_up_to_3x_m2,
+            "Diện tích vượt > 3 lần hạn mức (m²)": land_tax_breakdown.area_over_3x_m2,
+            "Thuế phần trong hạn mức (triệu)": land_tax_breakdown.tax_in_quota_mil,
+            "Thuế phần vượt <=3x (triệu)": land_tax_breakdown.tax_over_quota_up_to_3x_mil,
+            "Thuế phần vượt >3x (triệu)": land_tax_breakdown.tax_over_3x_mil,
+            "Tổng sau miễn/giảm (triệu)": land_tax_breakdown.total_mil,
+        }
+    )
+
+st.info(
+    "Gợi ý trình bày trong khóa luận: chụp màn hình phần *Chi tiết thuế SDĐ PNN* để minh họa tính minh bạch (có breakdown theo bậc thuế)."
 )
