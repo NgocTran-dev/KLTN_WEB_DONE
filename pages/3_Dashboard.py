@@ -14,7 +14,7 @@ GAP = "Price Gap Corrected"
 RISK = "Risk Score"
 FAKE = "Độ tin cậy tin ảo (%)"
 
-st.title("Dashboard")
+st.title("📊 Dashboard")
 st.caption("Tổng hợp Price Gap & Risk Score theo khu vực – kèm bản đồ heatmap")
 
 # --- Load data ---
