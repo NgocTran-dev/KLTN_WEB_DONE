@@ -1,171 +1,136 @@
+"""Tax & fee helpers (educational / reference only).
+
+All values returned in *million VND* for convenience.
+
+NOTE: This app provides only simplified estimates. In practice, tax bases,
+exemptions/reductions, local land quotas (hạn mức), and dossier-specific rules
+must be verified with current legal documents and local tax authorities.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Dict, Any
 
-ReliefType = Literal[
-    "none",
-    "exempt_within_quota",
-    "reduce50_within_quota",
-    "exempt_all",
-    "reduce50_all",
-]
 
-def _to_float(x: object, default: float = 0.0) -> float:
-    try:
-        return float(x)
-    except Exception:
-        return default
+@dataclass
+class LandUseTaxBreakdown:
+    area_in_quota_m2: float
+    area_over_quota_up_to_3x_m2: float
+    area_over_3x_m2: float
+    tax_in_quota_mil: float
+    tax_over_quota_up_to_3x_mil: float
+    tax_over_3x_mil: float
+    total_mil: float
+    applied_reduction_factor: float
 
-def registration_fee_land_vnd(
+
+def calc_registration_fee_land(
     area_m2: float,
-    gov_price_mil_m2: float,
+    gov_price_mil_per_m2: float,
     rate: float = 0.005,
-    exempt: bool = False,
-) -> Dict[str, Any]:
-    """Estimate registration fee for land (lệ phí trước bạ - phần đất).
+    is_exempt: bool = False,
+) -> float:
+    """Lệ phí trước bạ (đất) ≈ 0.5% * (diện tích * giá tính lệ phí).
 
-    Base value is typically the provincial land-price table (bảng giá đất),
-    i.e., area * gov_unit_price, then multiply by rate (commonly 0.5%).
-
-    Inputs:
-        area_m2: land area in m²
-        gov_price_mil_m2: government unit price in million VND/m²
-
-    Returns:
-        dict with base_value_vnd, fee_vnd, rate, exempt
+    Parameters
+    ----------
+    area_m2:
+        Land area.
+    gov_price_mil_per_m2:
+        Land price used as fee base (often land price table).
+    rate:
+        Default 0.005 (0.5%).
+    is_exempt:
+        If True, return 0.
     """
-    area = max(_to_float(area_m2), 0.0)
-    gov = max(_to_float(gov_price_mil_m2), 0.0)
-    base_value_vnd = area * gov * 1_000_000.0
-    fee_vnd = 0.0 if exempt else base_value_vnd * _to_float(rate)
-    return {
-        "base_value_vnd": base_value_vnd,
-        "fee_vnd": fee_vnd,
-        "rate": _to_float(rate),
-        "exempt": bool(exempt),
-    }
+    if is_exempt:
+        return 0.0
+    base_value_mil = max(area_m2, 0.0) * max(gov_price_mil_per_m2, 0.0)
+    return base_value_mil * rate
 
-def pit_transfer_tax_vnd(
-    transfer_price_billion_vnd: float,
+
+def calc_pit_real_estate_transfer(
+    transfer_price_mil: float,
     rate: float = 0.02,
-    exempt: bool = False,
-) -> Dict[str, Any]:
-    """Estimate PIT for real-estate transfer (thuế TNCN khi chuyển nhượng BĐS).
+    is_exempt: bool = False,
+) -> float:
+    """Personal income tax (PIT) for real-estate transfer.
 
-    Common practice: 2% x transfer price (contract price) for real estate transfer.
-    Many exemption cases exist; this function supports a simple exempt flag.
+    Simplified: PIT ≈ 2% * transfer price.
 
-    Input:
-        transfer_price_billion_vnd: contract/transfer price (billion VND)
-
-    Returns:
-        dict with tax_base_vnd, pit_vnd, rate, exempt
+    Parameters
+    ----------
+    transfer_price_mil:
+        Total transfer price in million VND.
+    rate:
+        Default 0.02 (2%).
+    is_exempt:
+        If True, return 0.
     """
-    base_vnd = max(_to_float(transfer_price_billion_vnd), 0.0) * 1_000_000_000.0
-    pit_vnd = 0.0 if exempt else base_vnd * _to_float(rate)
-    return {
-        "tax_base_vnd": base_vnd,
-        "pit_vnd": pit_vnd,
-        "rate": _to_float(rate),
-        "exempt": bool(exempt),
-    }
+    if is_exempt:
+        return 0.0
+    return max(transfer_price_mil, 0.0) * rate
 
-def non_agri_land_tax_vnd(
+
+def calc_non_agri_land_use_tax(
     area_m2: float,
-    gov_price_mil_m2: float,
-    quota_m2: float = 160.0,
-    relief: ReliefType = "none",
-) -> Dict[str, Any]:
-    """Estimate non-agricultural land use tax for residential land (thuế SDĐ phi nông nghiệp - đất ở).
+    gov_price_mil_per_m2: float,
+    quota_m2: float,
+    is_exempt: bool = False,
+    is_reduce_50: bool = False,
+) -> LandUseTaxBreakdown:
+    """Thuế sử dụng đất phi nông nghiệp (đất ở) - lũy tiến từng phần.
 
-    Progressive rates for residential land (Luật Thuế SDĐPNN 48/2010/QH12):
-        - 0.03% for area within quota (hạn mức)
-        - 0.07% for area exceeding quota up to 3x quota
-        - 0.15% for area exceeding 3x quota
+    Simplified based on Luật 48/2010/QH12 (Điều 7):
+    - In quota: 0.03%
+    - Over quota up to 3x: 0.07%
+    - Over 3x: 0.15%
 
-    Relief handling (simplified for the tool UI):
-        - none: no relief
-        - exempt_within_quota: set tax on the within-quota segment to 0
-        - reduce50_within_quota: 50% reduction on the within-quota segment
-        - exempt_all / reduce50_all: apply to total tax (used for some force-majeure cases, etc.)
-
-    NOTE: This is an educational estimator. Actual assessment depends on hồ sơ, quyết định địa phương,
-    and the tax authority's final determination.
-
-    Returns:
-        dict with segment areas, segment taxes, totals (VND)
+    Returns a breakdown for transparency.
     """
-    area = max(_to_float(area_m2), 0.0)
-    gov = max(_to_float(gov_price_mil_m2), 0.0)
-    quota = max(_to_float(quota_m2), 0.0)
 
-    # Segment areas
-    a1 = min(area, quota) if quota > 0 else 0.0
-    a2 = 0.0
-    a3 = 0.0
-    if quota > 0:
-        a2 = min(max(area - quota, 0.0), 2 * quota)          # (quota, 3*quota]
-        a3 = max(area - 3 * quota, 0.0)                      # > 3*quota
-    else:
-        # If quota unknown, fall back to flat rate of the first tier (educational)
-        a1 = area
-        a2 = 0.0
-        a3 = 0.0
+    area_m2 = float(max(area_m2, 0.0))
+    gov_price_mil_per_m2 = float(max(gov_price_mil_per_m2, 0.0))
+    quota_m2 = float(max(quota_m2, 0.0))
 
-    # Rates
-    r1 = 0.0003  # 0.03%
-    r2 = 0.0007  # 0.07%
-    r3 = 0.0015  # 0.15%
+    # If quota is missing/0, treat the whole area as "in quota" to avoid divide confusion.
+    if quota_m2 <= 0:
+        quota_m2 = area_m2
 
-    # Segment tax (VND)
-    tax1 = a1 * gov * 1_000_000.0 * r1
-    tax2 = a2 * gov * 1_000_000.0 * r2
-    tax3 = a3 * gov * 1_000_000.0 * r3
-    total_before_relief = tax1 + tax2 + tax3
+    if is_exempt:
+        return LandUseTaxBreakdown(
+            area_in_quota_m2=area_m2,
+            area_over_quota_up_to_3x_m2=0.0,
+            area_over_3x_m2=0.0,
+            tax_in_quota_mil=0.0,
+            tax_over_quota_up_to_3x_mil=0.0,
+            tax_over_3x_mil=0.0,
+            total_mil=0.0,
+            applied_reduction_factor=0.0,
+        )
 
-    # Apply relief
-    relief = relief or "none"
-    tax1_after = tax1
-    tax2_after = tax2
-    tax3_after = tax3
+    a1 = min(area_m2, quota_m2)
+    a2 = max(0.0, min(area_m2, 3.0 * quota_m2) - quota_m2)
+    a3 = max(0.0, area_m2 - 3.0 * quota_m2)
 
-    if relief == "exempt_within_quota":
-        tax1_after = 0.0
-    elif relief == "reduce50_within_quota":
-        tax1_after = tax1 * 0.5
-    elif relief == "exempt_all":
-        tax1_after = 0.0
-        tax2_after = 0.0
-        tax3_after = 0.0
-    elif relief == "reduce50_all":
-        tax1_after *= 0.5
-        tax2_after *= 0.5
-        tax3_after *= 0.5
+    # Rates in percent
+    t1 = a1 * gov_price_mil_per_m2 * (0.03 / 100.0)
+    t2 = a2 * gov_price_mil_per_m2 * (0.07 / 100.0)
+    t3 = a3 * gov_price_mil_per_m2 * (0.15 / 100.0)
 
-    total_after_relief = tax1_after + tax2_after + tax3_after
+    total = t1 + t2 + t3
+    reduction_factor = 1.0
+    if is_reduce_50:
+        reduction_factor = 0.5
+        total *= reduction_factor
 
-    return {
-        "area_m2": area,
-        "quota_m2": quota,
-        "gov_price_mil_m2": gov,
-        "segments": {
-            "within_quota_m2": a1,
-            "over_quota_to_3x_m2": a2,
-            "over_3x_quota_m2": a3,
-        },
-        "rates": {"r1": r1, "r2": r2, "r3": r3},
-        "tax_vnd": {
-            "within_quota": tax1_after,
-            "over_quota_to_3x": tax2_after,
-            "over_3x_quota": tax3_after,
-            "total": total_after_relief,
-        },
-        "tax_vnd_before_relief": {
-            "within_quota": tax1,
-            "over_quota_to_3x": tax2,
-            "over_3x_quota": tax3,
-            "total": total_before_relief,
-        },
-        "relief": relief,
-    }
+    return LandUseTaxBreakdown(
+        area_in_quota_m2=a1,
+        area_over_quota_up_to_3x_m2=a2,
+        area_over_3x_m2=a3,
+        tax_in_quota_mil=t1 * (reduction_factor if is_reduce_50 else 1.0),
+        tax_over_quota_up_to_3x_mil=t2 * (reduction_factor if is_reduce_50 else 1.0),
+        tax_over_3x_mil=t3 * (reduction_factor if is_reduce_50 else 1.0),
+        total_mil=total,
+        applied_reduction_factor=reduction_factor,
+    )
