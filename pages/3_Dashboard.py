@@ -1,318 +1,285 @@
-import streamlit as st
+import numpy as np
 import pandas as pd
 import pydeck as pdk
+import streamlit as st
 
+from utils.geocode import geocode_many
 from utils.io import load_data
-from utils.style import inject_css
 
-# ------------------------
-# Optional: Snap points to street geometry from OpenStreetMap (OSM)
-# ------------------------
-import random
-import re
-import unicodedata
+st.set_page_config(page_title="Dashboard", page_icon="📊", layout="wide")
 
-try:
-    import osmnx as ox
-    from shapely.geometry import LineString, MultiLineString
-    from shapely.ops import linemerge
+GOV = "Gov Price 2026 Corrected (million VND/m²)"
+MARKET = "Market Reference Unit Price (median, million VND/m²)"
+GAP = "Price Gap Corrected"
+RISK = "Risk Score"
+FAKE = "Độ tin cậy tin ảo (%)"
 
-    OSMNX_OK = True
-    ox.settings.use_cache = True
-    ox.settings.log_console = False
-except Exception:
-    # If osmnx/geopandas stack isn't installed, app still runs without snapping.
-    OSMNX_OK = False
+st.title("Dashboard")
+st.caption("Tổng hợp Price Gap & Risk Score theo khu vực – kèm bản đồ heatmap")
 
+# --- Load data ---
+df, _, _ = load_data(frontage_only=True)
 
-def strip_accents(s: str) -> str:
-    s = unicodedata.normalize("NFD", s)
-    return "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+# --- Filters ---
+left, right = st.columns([1.2, 1.8])
+with left:
+    districts = st.multiselect(
+        "Chọn quận",
+        options=sorted(df["District"].dropna().unique().tolist()),
+        default=sorted(df["District"].dropna().unique().tolist()),
+    )
 
+    mode = st.radio(
+        "Chế độ bản đồ",
+        options=["Theo tuyến đường (gọn)", "Theo từng tin (dày)"],
+        index=0,
+        help="Theo tuyến đường sẽ gom các tin theo (quận/phường/đường) để đỡ dồn điểm.",
+    )
 
-def street_variants(street: str) -> list[str]:
-    """
-    Generate a few name variants to increase OSM match rate.
-    Examples: "Đường Trần Hưng Đạo" -> ["Đường Trần Hưng Đạo", "Trần Hưng Đạo", "Tran Hung Dao"]
-    """
-    s = str(street or "").strip()
-    s2 = re.sub(r"^(đường|duong|đ\.)\s+", "", s, flags=re.IGNORECASE).strip()
-    return list(dict.fromkeys([s, s2, strip_accents(s2)]))
+    metric = st.selectbox(
+        "Heatmap theo chỉ số",
+        options=["Price Gap", "Risk Score", "Mật độ tin"],
+        index=0,
+    )
 
+    heat_radius = st.slider("Bán kính heatmap (px)", min_value=10, max_value=150, value=60, step=5)
+    point_radius = st.slider("Bán kính điểm (m)", min_value=20, max_value=300, value=90, step=10)
 
-def _merge_to_line(geom):
-    if isinstance(geom, LineString):
-        return geom
-    if isinstance(geom, MultiLineString):
-        merged = linemerge(geom)
-        if isinstance(merged, LineString):
-            return merged
-        if isinstance(merged, MultiLineString):
-            return max(list(merged.geoms), key=lambda g: g.length)
-    return None
+    refresh_coords = st.checkbox(
+        "Cải thiện tọa độ theo OSM/Nominatim (chỉ áp dụng 'Theo tuyến đường')",
+        value=False,
+        help="Dùng Nominatim để geocode lại các tuyến có tọa độ bị trùng nhiều (có thể chậm ở lần đầu).",
+    )
+    geocode_limit = st.slider(
+        "Giới hạn số tuyến geocode lại",
+        min_value=10,
+        max_value=120,
+        value=40,
+        step=10,
+        disabled=not refresh_coords,
+    )
 
+with right:
+    st.subheader("Thống kê nhanh")
+    if len(districts) == 0:
+        st.warning("Vui lòng chọn ít nhất 1 quận.")
+        st.stop()
 
-@st.cache_data(show_spinner=False)
-def fetch_street_line(street_name: str, district: int):
-    """
-    Fetch street polyline (LineString) from OSM within the district.
-    Cached by Streamlit to avoid repeated requests.
-    """
-    if not OSMNX_OK:
-        return None
+    dff = df[df["District"].isin(districts)].copy()
 
-    place = f"District {district}, Ho Chi Minh City, Vietnam"
-
-    for name_try in street_variants(street_name):
-        if not name_try:
-            continue
-
-        tags = {"highway": True, "name": name_try}
-
-        # OSMnx v2: features_from_place; v1: geometries_from_place
-        if hasattr(ox, "features_from_place"):
-            gdf = ox.features_from_place(place, tags)
-        else:
-            gdf = ox.geometries_from_place(place, tags)
-
-        if gdf is None or len(gdf) == 0:
-            continue
-
-        gdf = gdf[gdf.geometry.type.isin(["LineString", "MultiLineString"])]
-        if gdf.empty:
-            continue
-
-        lines = []
-        for geom in gdf.geometry:
-            line = _merge_to_line(geom)
-            if line is not None and line.length > 0:
-                lines.append(line)
-
-        if lines:
-            return max(lines, key=lambda g: g.length)
-
-    return None
-
-
-def sample_points_on_line(line, n: int):
-    """Sample n random points along a LineString."""
-    pts = []
-    if line is None or n <= 0:
-        return pts
-    for _ in range(n):
-        d = random.random() * line.length
-        p = line.interpolate(d)
-        pts.append((float(p.y), float(p.x)))  # (lat, lon)
-    return pts
-
-
-# ------------------------
-# Streamlit setup
-# ------------------------
-st.set_page_config(page_title="Dashboard | RegTech BĐS", layout="wide")
-inject_css()
-st.title("Dashboard tổng quan (Price Gap & Risk)")
-
-df, _, summary_by_district, top_streets = load_data()
-
-# ------------------------
-# Filters
-# ------------------------
-st.sidebar.header("Bộ lọc")
-
-district_opt = st.sidebar.multiselect("Quận", options=[1, 5], default=[1, 5])
-
-risk_levels = sorted([x for x in df["risk_level"].dropna().unique().tolist() if str(x).strip()])
-risk_level_opt = st.sidebar.multiselect("Risk Level", options=risk_levels, default=risk_levels)
-
-aggregation = st.sidebar.radio(
-    "Cách hiển thị trên bản đồ",
-    options=["Gộp theo (Phường, Đường) để tránh bị dồn điểm", "Hiển thị từng tin đăng"],
-    index=0,
-)
-
-weight_mode = st.sidebar.selectbox("Trọng số heatmap", options=["Risk Score", "Price Gap"], index=0)
-
-# Heatmap radius in Deck.gl is pixels, not meters
-radius_px = st.sidebar.slider("Bán kính heatmap (px)", min_value=20, max_value=150, value=60, step=5)
-
-snap_to_street = st.sidebar.checkbox(
-    "Rải điểm theo tuyến đường (OSM) để bám đúng đường",
-    value=True,
-    disabled=not OSMNX_OK,
-)
-
-if not OSMNX_OK:
-    st.sidebar.caption("⚠️ Chưa cài osmnx/shapely nên không thể bật chế độ rải theo tuyến đường.")
-
-# Apply filters
-dff = df.copy()
-dff = dff[dff["District"].isin(district_opt)].copy()
-if risk_level_opt:
-    dff = dff[dff["risk_level"].astype(str).isin([str(x) for x in risk_level_opt])].copy()
-
-# ------------------------
-# Summary
-# ------------------------
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Tin đăng (sau lọc)", f"{len(dff):,}")
-c2.metric("Quận đang xem", ", ".join(map(str, district_opt)) if district_opt else "—")
-c3.metric("Số phường", f"{dff['Ward'].nunique():,}" if "Ward" in dff.columns else "—")
-if set(["District", "ward_norm", "road_norm"]).issubset(set(dff.columns)):
-    c4.metric("Số tuyến đường", f"{dff[['District','ward_norm','road_norm']].drop_duplicates().shape[0]:,}")
-else:
-    c4.metric("Số tuyến đường", "—")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Số tin", f"{len(dff):,}")
+    with c2:
+        st.metric("Price Gap (median)", f"{np.nanmedian(dff[GAP]):.3f}×")
+    with c3:
+        st.metric("Risk (mean)", f"{np.nanmean(dff[RISK]):.3f}")
+    with c4:
+        st.metric("S_fake (mean)", f"{np.nanmean(dff[FAKE]):.1f}%")
 
 st.divider()
 
-# ------------------------
-# Tables
-# ------------------------
-st.subheader("Top tuyến đường (gợi ý khu vực có chênh lệch cao)")
+# --- Charts ---
+chart1, chart2 = st.columns(2)
+
+with chart1:
+    st.subheader("Phân bố Price Gap")
+    import matplotlib.pyplot as plt
+
+    fig = plt.figure()
+    for d in sorted(dff["District"].dropna().unique().tolist()):
+        vals = dff[dff["District"] == d][GAP].dropna().values
+        if len(vals) == 0:
+            continue
+        plt.hist(vals, bins=30, alpha=0.55, label=f"Q{int(d)}")
+    plt.xlabel("Price Gap")
+    plt.ylabel("Số lượng")
+    plt.legend()
+    st.pyplot(fig, clear_figure=True)
+
+with chart2:
+    st.subheader("Price Gap theo quận (boxplot)")
+    import matplotlib.pyplot as plt
+
+    fig = plt.figure()
+    dff.boxplot(column=GAP, by="District", grid=False)
+    plt.suptitle("")
+    plt.title("")
+    plt.xlabel("Quận")
+    plt.ylabel("Price Gap")
+    st.pyplot(fig, clear_figure=True)
+
+# --- Top streets (dynamic) ---
+st.subheader("Top tuyến đường theo Price Gap (median, n≥10)")
 
 street_agg = (
-    dff.groupby(["District", "Ward", "Street"], dropna=False)
+    dff.groupby(["District", "Ward", "Street"], dropna=True)
     .agg(
         Listings=("Street", "size"),
-        Median_GovPrice=("gov_price_mil_m2", "median"),
-        Median_MarketRef=("market_ref_mil_m2", "median"),
-        Median_PriceGap=("price_gap", "median"),
-        Mean_Risk=("risk_score", "mean"),
-        Latitude=("Latitude", "mean"),
-        Longitude=("Longitude", "mean"),
+        Latitude=("Latitude", "median"),
+        Longitude=("Longitude", "median"),
+        Median_Gov=(GOV, "median"),
+        Median_Market=(MARKET, "median"),
+        Median_Gap=(GAP, "median"),
+        Mean_Risk=(RISK, "mean"),
+        Mean_Fake=(FAKE, "mean"),
     )
     .reset_index()
 )
 
-min_n = st.slider("Ngưỡng số tin tối thiểu (n≥)", min_value=1, max_value=50, value=10, step=1)
-rank_df = street_agg[street_agg["Listings"] >= min_n].copy().sort_values("Median_PriceGap", ascending=False)
-st.dataframe(rank_df.head(30), use_container_width=True)
+street_top = street_agg[street_agg["Listings"] >= 10].sort_values("Median_Gap", ascending=False).head(15)
+
+st.dataframe(
+    street_top[["District", "Ward", "Street", "Listings", "Median_Market", "Median_Gov", "Median_Gap", "Mean_Risk"]],
+    use_container_width=True,
+)
 
 st.divider()
 
-# ------------------------
-# Map (Heatmap)
-# ------------------------
-st.subheader("Bản đồ nhiệt (heatmap)")
+# --- Map prep ---
+st.subheader("Bản đồ (Heatmap + điểm)")
 
-if weight_mode == "Risk Score":
-    weight_col = "Mean_Risk" if aggregation.startswith("Gộp") else "risk_score"
-    label = "Risk"
-else:
-    weight_col = "Median_PriceGap" if aggregation.startswith("Gộp") else "price_gap"
-    label = "Gap"
+if mode.startswith("Theo tuyến"):
+    points = street_agg.copy()
+    points["listings"] = points["Listings"].astype(float)
+    points["metric_gap"] = points["Median_Gap"].astype(float)
+    points["metric_risk"] = points["Mean_Risk"].astype(float)
 
-if aggregation.startswith("Gộp"):
-    map_df = street_agg.copy()
-    map_df["weight"] = pd.to_numeric(map_df[weight_col], errors="coerce")
-else:
-    map_df = dff.copy()
-    map_df["weight"] = pd.to_numeric(map_df[weight_col], errors="coerce")
+    if refresh_coords:
+        # Identify coordinates that are shared by many streets (often caused by coarse geocoding)
+        coord_counts = (
+            points.groupby(["Latitude", "Longitude"], dropna=True)
+            .size()
+            .reset_index(name="cnt")
+            .sort_values("cnt", ascending=False)
+        )
+        dup_coords = coord_counts[coord_counts["cnt"] >= 3].head(geocode_limit)
 
-map_df = map_df.dropna(subset=["Latitude", "Longitude", "weight"]).copy()
+        if len(dup_coords) > 0:
+            # Build geocode queries for affected streets
+            points = points.merge(dup_coords[["Latitude", "Longitude"]], on=["Latitude", "Longitude"], how="left", indicator=True)
+            needs_fix = points["_merge"].eq("both")
+            points.loc[needs_fix, "geo_query"] = (
+                points.loc[needs_fix, "Street"].astype(str)
+                + ", "
+                + points.loc[needs_fix, "Ward"].astype(str)
+                + ", Quận "
+                + points.loc[needs_fix, "District"].astype(int).astype(str)
+                + ", Thành phố Hồ Chí Minh, Việt Nam"
+            )
 
-# ---- Snap to OSM street geometry (street-level only)
-if aggregation.startswith("Gộp") and snap_to_street and not map_df.empty:
-    keys = map_df[["District", "Street"]].drop_duplicates()
-    street_lines = {}
+            with st.spinner("Đang geocode lại một số tuyến theo Nominatim..."):
+                q_list = points.loc[needs_fix, "geo_query"].dropna().unique().tolist()
+                geo_map = geocode_many(q_list)
 
-    with st.spinner("Đang truy vấn tuyến đường từ OSM (lần đầu có thể hơi lâu)..."):
-        for _, r in keys.iterrows():
-            dist = int(r["District"])
-            street = str(r["Street"]).strip()
-            street_lines[(dist, street)] = fetch_street_line(street, dist)
+            # Apply back
+            def _map_lat(q):
+                return geo_map.get(q, (np.nan, np.nan))[0]
 
-    snapped_rows = []
-    MAX_POINTS_PER_STREET = 40  # cap to keep app fast/clean
+            def _map_lon(q):
+                return geo_map.get(q, (np.nan, np.nan))[1]
 
-    for _, row in map_df.iterrows():
-        street = str(row["Street"]).strip()
-        dist = int(row["District"])
-        k = int(row.get("Listings", 1))
-        k = max(1, min(k, MAX_POINTS_PER_STREET))
+            points.loc[needs_fix, "Latitude"] = points.loc[needs_fix, "geo_query"].map(_map_lat)
+            points.loc[needs_fix, "Longitude"] = points.loc[needs_fix, "geo_query"].map(_map_lon)
 
-        line = street_lines.get((dist, street))
-        if line is None:
-            snapped_rows.append({**row.to_dict()})
         else:
-            pts = sample_points_on_line(line, k)
-            if not pts:
-                snapped_rows.append({**row.to_dict()})
-            else:
-                for (lat, lon) in pts:
-                    new_row = {**row.to_dict()}
-                    new_row["Latitude"] = lat
-                    new_row["Longitude"] = lon
-                    snapped_rows.append(new_row)
+            st.info("Không phát hiện cụm tọa độ trùng nhiều để geocode lại.")
 
-    map_df = pd.DataFrame(snapped_rows)
-
-if map_df.empty:
-    st.info("Không có đủ dữ liệu tọa độ để vẽ heatmap sau khi lọc.")
 else:
-    center_lat = float(map_df["Latitude"].mean())
-    center_lon = float(map_df["Longitude"].mean())
+    points = dff.copy()
+    points["listings"] = 1.0
+    points["metric_gap"] = points[GAP].astype(float)
+    points["metric_risk"] = points[RISK].astype(float)
 
-    heat_layer = pdk.Layer(
+    if refresh_coords:
+        st.info("Tùy chọn geocode lại chỉ áp dụng cho chế độ 'Theo tuyến đường'.")
+
+# Clean coords
+points["Latitude"] = pd.to_numeric(points["Latitude"], errors="coerce")
+points["Longitude"] = pd.to_numeric(points["Longitude"], errors="coerce")
+points = points.dropna(subset=["Latitude", "Longitude"]).copy()
+
+if len(points) == 0:
+    st.warning("Không có tọa độ hợp lệ để vẽ bản đồ.")
+    st.stop()
+
+# Choose heatmap weight + point color metric
+if metric == "Price Gap":
+    weight_col = "metric_gap"
+    color_vals = points["metric_gap"]
+elif metric == "Risk Score":
+    weight_col = "metric_risk"
+    color_vals = points["metric_risk"]
+else:
+    weight_col = "listings"
+    color_vals = points["listings"]
+
+# Normalize for colors
+t = (color_vals - color_vals.min()) / (color_vals.max() - color_vals.min() + 1e-9)
+points["color"] = [
+    [int(255 * tt), int(80), int(255 * (1 - tt)), 160] for tt in t.fillna(0).clip(0, 1).tolist()
+]
+
+# View state
+center_lat = float(points["Latitude"].mean())
+center_lon = float(points["Longitude"].mean())
+zoom_default = 14.2 if len(districts) == 1 else 13.6
+
+map_style = st.selectbox(
+    "Map style",
+    options=[
+        "Carto Positron (light)",
+        "Carto Dark Matter (dark)",
+        "Carto Voyager (default)",
+    ],
+    index=0,
+)
+
+style_map = {
+    "Carto Positron (light)": "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+    "Carto Dark Matter (dark)": "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+    "Carto Voyager (default)": "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
+}
+
+view_state = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=zoom_default, pitch=30)
+
+layers = [
+    pdk.Layer(
         "HeatmapLayer",
-        data=map_df,
-        get_position=["Longitude", "Latitude"],
-        get_weight="weight",
-        radiusPixels=radius_px,
-        threshold=0.05,
-    )
-
-    point_layer = pdk.Layer(
+        data=points,
+        get_position="[Longitude, Latitude]",
+        get_weight=weight_col,
+        radius_pixels=heat_radius,
+    ),
+    pdk.Layer(
         "ScatterplotLayer",
-        data=map_df,
-        get_position=["Longitude", "Latitude"],
-        get_radius=12,
-        radius_units="meters",
+        data=points,
+        get_position="[Longitude, Latitude]",
+        get_radius=point_radius,
+        get_fill_color="color",
         pickable=True,
         auto_highlight=True,
-        get_fill_color=[0, 123, 255, 60],
-        get_line_color=[0, 90, 200, 80],
-        stroked=True,
-        filled=True,
-    )
+    ),
+]
 
-    tooltip = {
-        "html": "<b>Quận:</b> {District} <br/>"
-                "<b>Phường:</b> {Ward} <br/>"
-                "<b>Đường:</b> {Street} <br/>"
-                f"<b>{label}:</b> " + "{weight}"
-    }
+tooltip = {
+    "html": "<b>Quận:</b> {District} <br/> <b>Phường:</b> {Ward} <br/> <b>Đường:</b> {Street} <br/> <b>Price Gap:</b> {Median_Gap} <br/> <b>Risk:</b> {Mean_Risk} <br/> <b>Số tin:</b> {Listings}",
+    "style": {"backgroundColor": "white", "color": "black"},
+}
 
-    deck = pdk.Deck(
-        map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
-        initial_view_state=pdk.ViewState(
-            latitude=center_lat,
-            longitude=center_lon,
-            zoom=13.6,
-            pitch=40,
-        ),
-        layers=[heat_layer, point_layer],
-        tooltip=tooltip,
-    )
+if not mode.startswith("Theo tuyến"):
+    tooltip["html"] = "<b>Quận:</b> {District} <br/> <b>Phường:</b> {Ward} <br/> <b>Đường:</b> {Street} <br/> <b>Price Gap:</b> {metric_gap} <br/> <b>Risk:</b> {metric_risk}"
 
-    st.pydeck_chart(deck, use_container_width=True)
+r = pdk.Deck(
+    layers=layers,
+    initial_view_state=view_state,
+    map_style=style_map.get(map_style),
+    tooltip=tooltip,
+)
 
-st.divider()
+st.pydeck_chart(r, use_container_width=True)
 
-# ------------------------
-# Extra tables from the data file
-# ------------------------
-if summary_by_district is not None:
-    st.subheader("📎 Summary by District (from data file)")
-    st.dataframe(summary_by_district, use_container_width=True)
-
-if top_streets is not None:
-    with st.expander("📎 Top Streets (from data file)", expanded=False):
-        st.dataframe(top_streets.head(50), use_container_width=True)
-
-st.warning(
-    """Lưu ý về heatmap:
-- Nếu chưa bật “Rải điểm theo tuyến đường (OSM)”, tọa độ thường chỉ là xấp xỉ theo đường/phường/quận (điểm đại diện).
-- Khi bật chế độ OSM, hệ thống truy vấn hình học tuyến đường và rải các điểm mẫu dọc theo tuyến để bản đồ bám theo đường tốt hơn.
-- Đây là trực quan hóa ở mức tuyến đường (street-level), không phải số nhà (address-level)."""
+st.caption(
+    "Nếu điểm vẫn bị dồn: thử giảm bán kính heatmap/điểm hoặc chuyển sang theo tuyến đường. "
+    "Bạn cũng có thể bật 'Cải thiện tọa độ' để geocode lại các cụm bị trùng nhiều."
 )
