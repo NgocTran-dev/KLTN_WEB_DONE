@@ -86,27 +86,34 @@ with chart1:
     st.subheader("Phân bố Price Gap")
     import matplotlib.pyplot as plt
 
-    fig = plt.figure()
+    fig, ax = plt.subplots()
     for d in sorted(dff["District"].dropna().unique().tolist()):
-        vals = dff[dff["District"] == d][GAP].dropna().values
+        vals = dff.loc[dff["District"] == d, GAP].dropna().values
         if len(vals) == 0:
             continue
-        plt.hist(vals, bins=30, alpha=0.55, label=f"Q{int(d)}")
-    plt.xlabel("Price Gap")
-    plt.ylabel("Số lượng")
-    plt.legend()
+        ax.hist(vals, bins=30, alpha=0.55, label=f"Q{int(d)}")
+
+    ax.set_xlabel("Price Gap")
+    ax.set_ylabel("Số lượng")
+    ax.legend()
+    fig.tight_layout()
     st.pyplot(fig, clear_figure=True)
 
 with chart2:
     st.subheader("Price Gap theo quận (boxplot)")
     import matplotlib.pyplot as plt
 
-    fig = plt.figure()
-    dff.boxplot(column=GAP, by="District", grid=False)
-    plt.suptitle("")
-    plt.title("")
-    plt.xlabel("Quận")
-    plt.ylabel("Price Gap")
+    # đảm bảo có dữ liệu hợp lệ để vẽ
+    dplot = dff[["District", GAP]].dropna()
+
+    fig, ax = plt.subplots()
+    dplot.boxplot(column=GAP, by="District", grid=False, ax=ax)
+
+    fig.suptitle("")  # bỏ title mặc định "Boxplot grouped by..."
+    ax.set_title("")
+    ax.set_xlabel("Quận")
+    ax.set_ylabel("Price Gap")
+    fig.tight_layout()
     st.pyplot(fig, clear_figure=True)
 
 # --- Top streets (dynamic) ---
@@ -157,7 +164,12 @@ if mode.startswith("Theo tuyến"):
 
         if len(dup_coords) > 0:
             # Build geocode queries for affected streets
-            points = points.merge(dup_coords[["Latitude", "Longitude"]], on=["Latitude", "Longitude"], how="left", indicator=True)
+            points = points.merge(
+                dup_coords[["Latitude", "Longitude"]],
+                on=["Latitude", "Longitude"],
+                how="left",
+                indicator=True,
+            )
             needs_fix = points["_merge"].eq("both")
             points.loc[needs_fix, "geo_query"] = (
                 points.loc[needs_fix, "Street"].astype(str)
@@ -172,7 +184,6 @@ if mode.startswith("Theo tuyến"):
                 q_list = points.loc[needs_fix, "geo_query"].dropna().unique().tolist()
                 geo_map = geocode_many(q_list)
 
-            # Apply back
             def _map_lat(q):
                 return geo_map.get(q, (np.nan, np.nan))[0]
 
@@ -216,9 +227,7 @@ else:
 
 # Normalize for colors
 t = (color_vals - color_vals.min()) / (color_vals.max() - color_vals.min() + 1e-9)
-points["color"] = [
-    [int(255 * tt), int(80), int(255 * (1 - tt)), 160] for tt in t.fillna(0).clip(0, 1).tolist()
-]
+points["color"] = [[int(255 * tt), int(80), int(255 * (1 - tt)), 160] for tt in t.fillna(0).clip(0, 1).tolist()]
 
 # View state
 center_lat = float(points["Latitude"].mean())
@@ -268,7 +277,10 @@ tooltip = {
 }
 
 if not mode.startswith("Theo tuyến"):
-    tooltip["html"] = "<b>Quận:</b> {District} <br/> <b>Phường:</b> {Ward} <br/> <b>Đường:</b> {Street} <br/> <b>Price Gap:</b> {metric_gap} <br/> <b>Risk:</b> {metric_risk}"
+    tooltip["html"] = (
+        "<b>Quận:</b> {District} <br/> <b>Phường:</b> {Ward} <br/> <b>Đường:</b> {Street} "
+        "<br/> <b>Price Gap:</b> {metric_gap} <br/> <b>Risk:</b> {metric_risk}"
+    )
 
 r = pdk.Deck(
     layers=layers,
