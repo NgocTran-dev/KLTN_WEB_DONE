@@ -163,7 +163,4 @@ with st.expander("Chi tiết thuế SDĐ phi nông nghiệp (lũy tiến)"):
             "Tổng sau miễn/giảm (triệu)": land_tax_breakdown.total_mil,
         }
     )
-
-st.info(
-    "Gợi ý trình bày trong khóa luận: chụp màn hình phần *Chi tiết thuế SDĐ PNN* để minh họa tính minh bạch (có breakdown theo bậc thuế)."
 )
