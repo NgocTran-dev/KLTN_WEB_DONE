@@ -1,5 +1,5 @@
 import streamlit as st
-
+st.write("App started")
 from utils.ui import apply_base_style
 
 st.set_page_config(
