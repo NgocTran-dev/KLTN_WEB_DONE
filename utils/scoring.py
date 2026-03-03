@@ -179,6 +179,23 @@ def normalize_log_ratio(ratio: float, cap: float = 10.0) -> float:
     return float(np.clip(score, 0.0, 1.0))
 
 
+def normalize_log_deviation(ratio: float, cap: float = 10.0) -> float:
+    """Normalize deviation from 1.0 into [0, 1] using symmetric log scaling.
+
+    We care about *how far* the ratio deviates from 1, not the direction.
+    - ratio = 1   -> 0
+    - ratio = 2   -> same as ratio = 0.5  (both deviate 2x)
+    - ratio >= cap or ratio <= 1/cap -> 1
+
+    score = min(1, |log(ratio)| / log(cap))
+    """
+    if ratio is None or not np.isfinite(ratio) or ratio <= 0:
+        return float("nan")
+    ratio = max(ratio, 1e-9)
+    score = abs(math.log(ratio)) / math.log(cap)
+    return float(np.clip(score, 0.0, 1.0))
+
+
 def normalize_price_gap(price_gap: float, cap: float = 10.0) -> float:
     """Backward-compatible alias (older pages import this name)."""
     return normalize_log_ratio(price_gap, cap=cap)
@@ -257,7 +274,8 @@ def add_risk_components(df: pd.DataFrame, cfg: RiskConfig = RiskConfig()) -> pd.
         gov = out[cfg.gov_price_col].astype(float)
         ratio = unit / gov.replace(0, np.nan)
         out["ListingGap"] = ratio
-        out["S_price"] = ratio.apply(lambda r: normalize_log_ratio(r, cap=cfg.cap_ratio))
+        # Symmetric deviation: penalize both overpricing and underpricing vs GovPrice
+        out["S_price"] = ratio.apply(lambda r: normalize_log_deviation(r, cap=cfg.cap_ratio))
     else:
         out["ListingGap"] = np.nan
         out["S_price"] = np.nan
