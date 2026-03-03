@@ -3,10 +3,12 @@ import pandas as pd
 import pydeck as pdk
 import streamlit as st
 
+from utils.ui import apply_base_style
 from utils.geocode import geocode_many
 from utils.io import load_data
 
-st.set_page_config(page_title="Dashboard", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Dashboard", layout="wide")
+apply_base_style()
 
 GOV = "Gov Price 2026 Corrected (million VND/m²)"
 MARKET = "Market Reference Unit Price (median, million VND/m²)"
@@ -14,8 +16,8 @@ GAP = "Price Gap Corrected"
 RISK = "Risk Score"
 FAKE = "Độ tin cậy tin ảo (%)"
 
-st.title("📊 Dashboard")
-st.caption("Tổng hợp Price Gap & Risk Score theo khu vực – kèm bản đồ heatmap")
+st.title("Dashboard")
+st.caption("Tổng hợp Price Gap và Risk Score theo khu vực, kèm bản đồ heatmap.")
 
 # --- Load data ---
 df, _, _ = load_data(frontage_only=True)
@@ -32,8 +34,7 @@ with left:
     mode = st.radio(
         "Chế độ bản đồ",
         options=["Theo tuyến đường (gọn)", "Theo từng tin (dày)"],
-        index=0,
-        help="Theo tuyến đường sẽ gom các tin theo (quận/phường/đường) để đỡ dồn điểm.",
+        index=0
     )
 
     metric = st.selectbox(
@@ -48,8 +49,8 @@ with left:
     refresh_coords = st.checkbox(
         "Cải thiện tọa độ theo OSM/Nominatim (chỉ áp dụng 'Theo tuyến đường')",
         value=False,
-        help="Dùng Nominatim để geocode lại các tuyến có tọa độ bị trùng nhiều (có thể chậm ở lần đầu).",
     )
+    st.markdown("<div class='muted'>Tuỳ chọn này có thể mất thời gian ở lần chạy đầu.</div>", unsafe_allow_html=True)
     geocode_limit = st.slider(
         "Giới hạn số tuyến geocode lại",
         min_value=10,
