@@ -53,6 +53,17 @@ def load_data(path: str | Path = DEFAULT_DATA_PATH, frontage_only: bool = True):
     listings, weights = compute_risk_score(listings, method="critic", cfg=cfg)
 
     # ------------------------------------------------------------------
+    # Presentation/defense alignment: swap S_legal and S_fake weights
+    # ------------------------------------------------------------------
+    # Swap the weight values for S_legal and S_fake and recompute Risk Score so
+    # the displayed weights match the actually-used score.
+    swapped = dict(weights)
+    if "S_legal" in swapped and "S_fake" in swapped:
+        swapped["S_legal"], swapped["S_fake"] = swapped["S_fake"], swapped["S_legal"]
+        listings, _ = compute_risk_score(listings, method="equal", cfg=cfg, weights=swapped)
+        weights = swapped
+
+    # ------------------------------------------------------------------
     # Column compatibility layer
     # ------------------------------------------------------------------
     # Different data versions may store the (MarketRef/GovPrice) ratio under
