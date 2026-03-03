@@ -1,26 +1,16 @@
 import streamlit as st
 
+from utils.ui import apply_base_style
+
 st.set_page_config(
     page_title="RegTech BĐS TP.HCM (Quận 1 & 5)",
-    page_icon="🏙️",
     layout="wide",
 )
 
-# --- Simple styling (kept lightweight for Streamlit Cloud) ---
-st.markdown(
-    """
-    <style>
-      .block-container { padding-top: 2rem; padding-bottom: 2rem; }
-      [data-testid="stMetricValue"] { font-size: 1.6rem; }
-      .small-muted { color: rgba(49, 51, 63, 0.7); font-size: 0.9rem; }
-      .badge { display:inline-block; padding:0.15rem 0.5rem; border-radius: 999px; background:#f1f3f6; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+apply_base_style()
 
-st.title("🏙️ RegTech BĐS TP.HCM")
-st.caption("Tra cứu chênh lệch giá Nhà nước – thị trường (tham khảo) & chấm điểm rủi ro dữ liệu tin đăng")
+st.title("RegTech BĐS TP.HCM")
+st.caption("Tra cứu chênh lệch giá Nhà nước – thị trường và chấm điểm rủi ro dữ liệu tin đăng (tham khảo).")
 
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -28,17 +18,14 @@ with col1:
     st.markdown("- 02 quận: **Quận 1** và **Quận 5**")
     st.markdown("- Loại hình: **nhà ở mặt tiền** (đã loại nhà trong hẻm)")
 with col2:
-    st.markdown("**Tính năng chính**")
+    st.markdown("**Chức năng**")
     st.markdown("- Tra cứu **GovPrice 2026** theo đường/phường")
     st.markdown("- Tính **MarketRef (median)**, **Price Gap**, **Risk Score**")
 with col3:
-    st.markdown("**Cảnh báo pháp lý**")
+    st.markdown("**Lưu ý**")
+    st.markdown("<span class='badge'>Tham khảo</span>", unsafe_allow_html=True)
     st.markdown(
-        "<span class='badge'>Chỉ mang tính tham khảo</span> ",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        "<div class='small-muted'>Kết quả không phải kết luận pháp lý/định giá chính thức. Khi dùng thực tế nên đối chiếu hồ sơ pháp lý, vị trí thửa đất, và văn bản thuế hiện hành.</div>",
+        "<div class='muted'>Kết quả không phải kết luận pháp lý/định giá chính thức. Khi sử dụng thực tế cần đối chiếu hồ sơ pháp lý, vị trí thửa đất và văn bản hiện hành.</div>",
         unsafe_allow_html=True,
     )
 
@@ -46,15 +33,11 @@ st.divider()
 
 st.markdown(
     """
-**Cách dùng nhanh**
-1. Vào trang **Price Lookup** để chọn **Quận → Phường → Đường** và xem GovPrice 2026, MarketRef, Price Gap và Risk Score.
-2. Vào trang **Tax & Fees** để ước tính *tham khảo* các khoản thuế/phí phổ biến và thử bật **miễn/giảm** theo từng trường hợp.
-3. Vào trang **Dashboard** để xem phân bố Price Gap/Risk và bản đồ heatmap.
+### Hướng dẫn sử dụng
+- **Price Lookup:** chọn Quận → Phường → Đường để xem GovPrice 2026, MarketRef, Price Gap và Risk Score.
+- **Tax & Fees:** ước tính tham khảo các khoản thuế/phí phổ biến trong giao dịch.
+- **Dashboard:** xem phân bố Price Gap/Risk và bản đồ heatmap.
 
-> Gợi ý: Nếu bạn đang làm phần *minh họa thao tác web* cho khóa luận, hãy chụp màn hình ở các trang trên (có thể bật/tắt bộ lọc để ra đúng ví dụ bạn muốn trình bày).
+Nếu dữ liệu hiển thị chưa như mong muốn, bạn có thể điều chỉnh bộ lọc theo quận/phường/đường hoặc thay đổi chế độ bản đồ trong trang Dashboard.
 """
-)
-
-st.info(
-    "Nếu heatmap nhìn bị dồn 1 chỗ: hãy thử (1) chuyển sang chế độ **Theo tuyến đường**; (2) giảm **bán kính heatmap**; (3) zoom gần hơn theo từng quận."
 )
