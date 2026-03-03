@@ -161,4 +161,3 @@ with st.expander("Chi tiết thuế SDĐ phi nông nghiệp (lũy tiến)"):
             "Tổng sau miễn/giảm (triệu)": land_tax_breakdown.total_mil,
         }
     )
-)
