@@ -2,12 +2,14 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from utils.ui import apply_base_style
 from utils.io import load_data
 from utils.scoring import normalize_price_gap, RiskConfig
 
 st.set_page_config(page_title="Price Lookup", layout="wide")
+apply_base_style()
 
-st.title("Tra cứu GovPrice & MarketRef theo tuyến đường")
+st.title("Tra cứu giá theo tuyến đường")
 st.caption("Dữ liệu: tin đăng nhà ở mặt tiền (Q1, Q5) đã làm sạch; GovPrice theo Bảng giá đất TP.HCM 2026; MarketRef theo thống kê robust.")
 
 listings_df, summary_by_district, top_streets = load_data()
