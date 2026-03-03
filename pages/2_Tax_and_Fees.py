@@ -1,6 +1,7 @@
 import pandas as pd
 import streamlit as st
 
+from utils.ui import apply_base_style
 from utils.io import load_data
 from utils.tax import (
     calc_non_agri_land_use_tax,
@@ -8,20 +9,17 @@ from utils.tax import (
     calc_registration_fee_land,
 )
 
-st.set_page_config(page_title="Tax & Fees (Tham khảo)", page_icon="🧾", layout="wide")
+st.set_page_config(page_title="Tax & Fees", layout="wide")
+apply_base_style()
 
 GOV = "Gov Price 2026 Corrected (million VND/m²)"
 AREA = "Area (m²)"
 TOTAL_PRICE = "Price (million VND)"
 
-st.title("🧾 Tax & Fees (tham khảo)")
-st.caption(
-    "Ước tính nhanh 3 khoản phổ biến khi giao dịch BĐS: lệ phí trước bạ, thuế SDĐ phi nông nghiệp và thuế TNCN."
-)
+st.title("Thuế & Phí (tham khảo)")
+st.caption("Ước tính nhanh một số khoản phổ biến khi giao dịch BĐS: lệ phí trước bạ, thuế SDĐ phi nông nghiệp và thuế TNCN.")
 
-st.warning(
-    "Kết quả chỉ mang tính tham khảo/giáo dục. Miễn/giảm và căn cứ tính có thể phụ thuộc hồ sơ thực tế, hạn mức địa phương và văn bản hiện hành."
-)
+st.warning("Kết quả mang tính tham khảo. Miễn/giảm và căn cứ tính có thể phụ thuộc hồ sơ thực tế, hạn mức địa phương và quy định hiện hành.")
 
 # --- Load data ---
 df, _, _ = load_data(frontage_only=True)
