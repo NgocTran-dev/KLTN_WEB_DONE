@@ -115,7 +115,7 @@ with st.expander("Cách tính Risk Score (4 thành phần)", expanded=False):
     st.markdown(
         """- **S_legal (pháp lý)**: trích xuất tín hiệu từ mô tả tin đăng (ví dụ “sổ hồng/sổ đỏ” → 0; “vi bằng/giấy tay/sổ chung…” → 1; thiếu thông tin → 0.5).  
 - **S_fake (tin ảo)**: xác suất P(fake) từ mô hình tham khảo (dạng % → quy đổi về 0..1).  
-- **S_price (chênh lệch giá)**: chuẩn hóa log theo *ListingGap = unit_price / GovPrice*, với cap=10.  
+- **S_price (độ lệch giá so với benchmark)**: đo *độ xa* của *ListingGap = unit_price / GovPrice* so với 1 theo log đối xứng (lệch lên hay lệch xuống đều bị phạt như nhau), với cap=10.  
 - **S_plan (quy hoạch–tranh chấp)**: trích xuất tín hiệu “quy hoạch/lộ giới/tranh chấp…”, phân biệt câu khẳng định an toàn (“không quy hoạch…”) và câu cảnh báo (“dính quy hoạch…”).  
 
 RiskScore = Σ w·S (trọng số w theo CRITIC). Mức rủi ro Low/Medium/High được phân theo phân vị (Q33/Q67) trên toàn bộ dữ liệu.
