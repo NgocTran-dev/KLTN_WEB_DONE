@@ -103,11 +103,11 @@ with right:
         f"S_gap (chuẩn hoá)={s_gap:,.3f}"
     )
 
-#if weights:
-#    st.caption(
-#        "Trọng số (CRITIC): "
-#        + ", ".join([f"{k}={v:.2f}" for k, v in weights.items()])
-#    )
+if weights:
+    st.caption(
+        "Trọng số (CRITIC): "
+        + ", ".join([f"{k}={v:.2f}" for k, v in weights.items()])
+    )
 
 st.divider()
 
